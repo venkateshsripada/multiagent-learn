@@ -40,10 +40,12 @@ class GridWorld:
         
         # Construct the rovers
         for i in range(nground):
-            self.rovers[i] = Robot.ground_robot(self.dim_x, self.dim_y, self.nrover, 64)
+            self.rovers[i] = Robot.ground_robot(self.dim_x, self.dim_y, self.nrover, 64, .1, .9)
         for i in range(nUAV):
-            self.rovers[nground + i] = Robot.UAV(self.dim_x, self.dim_y, self.nrover, 64)
+            self.rovers[nground + i] = Robot.UAV(self.dim_x, self.dim_y, self.nrover, 64, .1, .9)
         print(self.rovers)
+
+    def reset
 
     # Function to visualize the current state of the grid world
     def visualize(self):
@@ -71,6 +73,18 @@ class GridWorld:
             print(row)
         print()
 
+    # Update the observed state of the world given that the $index-th robot made move $move
+    # Todo: make more efficient, if know the move the robot made previously, don't have to check
+    # the entire radius, just the changed states
+    def update_obs(move, index):
+        obs_len = self.rovers[i].obs_radius
+        # Loop through y
+        for i in range(max(0, self.rover_pos[i][1]-obs_len), min(self.dim_y, self.rover_pos[i][1]+obs_len)):
+            # Loop through x
+            for j in range(max(0, self.rover_pos[i][0]-obs_len), min(self.dim_x, self.rover_pos[i][0]+obs_len)):
+                self.obs_states[i, j] = 1
+
+
     # Updates state of the world given the array of robot actions
     # For actions: 0=right, 1=down, 2=left, 3=up
     def step(self, action, visual = False):
@@ -87,15 +101,16 @@ class GridWorld:
                 move = [0, -1]
             return move
             self.rovers[i].pos = list(map(add, self.rovers[i].pos, move))
+            update_obs(move, i)
             # Check pos limits, make sure not out of bounds
-            if self.rover_pos[i][0] < 0:
-                self.rover_pos[i][0] = 0
-            if self.rover_pos[i][0] >= self.dim_x:
-                self.rover_pos[i][0] = self.dim_x - 1
-            if self.rover_pos[i][1] < 0:
-                self.rover_pos[i][1] = 0
-            if self.rover_pos[i][1] >= self.dim_y:
-                self.rover_pos[i][1] = self.dim_y - 1
+            if self.rovers[i].pos[0] < 0:
+                self.rovers[i].pos[0] = 0
+            if self.rovers[i].pos[0] >= self.dim_x:
+                self.rovers[i].pos[0] = self.dim_x - 1
+            if self.rovers[i].pos[1] < 0:
+                self.rovers[i].pos[1] = 0
+            if self.rovers[i].pos[1] >= self.dim_y:
+                self.rovers[i].pos[1] = self.dim_y - 1
 
             if self.rovers[i].check_goal():
                 reached_goal = True
@@ -105,6 +120,7 @@ class GridWorld:
 
         return reached_goal
     
+    def train(niter):
 
     def render(self):
         # Visualize
