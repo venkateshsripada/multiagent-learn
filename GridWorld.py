@@ -6,6 +6,7 @@ import math
 import time
 import torch
 import Robot
+import matplotlib.pyplot as plt
 
 class Parameters:
     def __init__(self):
@@ -51,6 +52,7 @@ class GridWorld:
         for i in range(self.nrover):
             self.rovers[i].pos = np.zeros(2, dtype=int)
         self.targ_pos = np.array([random.randrange(self.dim_x), random.randrange(self.dim_y)])
+        self.num_obs = 0
         
 
     # Function to visualize the current state of the grid world
@@ -136,10 +138,11 @@ class GridWorld:
         rewards = np.ones(self.nrover)*obs_reward
         # If target pos is known, ground robot gets additional reward
         if (self.obs_states[self.targ_pos[1], self.targ_pos[0]] == 1):
-            rewards[0] += np.linalg.norm(self.rovers[0].pos - self.targ_pos)
+            rewards[0] += (20 - np.linalg.norm(self.rovers[0].pos - self.targ_pos))
         return rewards
 
     def train(self):
+        obs_rewards = np.zeros(self.niter)
         for k in range(self.niter):
             self.reset()
             for j in range(self.T):
@@ -167,8 +170,11 @@ class GridWorld:
                 self.eval()
                 for i in range(self.nrover):
                     self.rovers[i].targ_net.load_state_dict(self.rovers[i].Qnet.state_dict())
+            obs_rewards[k] = max(self.reward())
+            print(obs_rewards[k])
         for i in range(self.nrover):
             torch.save(self.rovers[i].Qnet.state_dict(), "./models/model"+str(i)+".pth")
+        return obs_rewards
 
     def eval(self, visual=False):
         self.reset()
@@ -188,7 +194,7 @@ class GridWorld:
             state = np.append(state, self.obs_states.flatten())
             for i in range(self.nrover):
                 acts[i] = self.rovers[i].rand_action(state, 0.0)
-            print(acts)
+            # print(acts)
             done = self.step(acts, visual)
         print("Time to capture: " + str(self.timestep))
 
@@ -227,12 +233,19 @@ class GridWorld:
 
 if __name__ == '__main__':
     
-    env = GridWorld(10, 10, 100, 500, 1, 3, [9, 9])
+    env = GridWorld(10, 10, 100, 50, 1, 3, [9, 9])
     # acts = [1, 2, 2, 1]
     # env.step(acts, True)
     # env.reset()
-    # env.train()
-    env.test_model("./models/model")
+    rews = env.train()
+    plt.plot(range(50), rews)
+    plt.xlabel("Iterations")
+    plt.ylabel("Final Reward")
+    plt.title("Learning curve of DQN")
+    plt.draw()
+    plt.savefig("./testfig.png")
+    # print(rews)
+    # env.test_model("./models/model")
  
 
 
