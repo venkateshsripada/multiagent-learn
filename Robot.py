@@ -14,15 +14,17 @@ class Robot:
         self.eps = eps
         self.gamma = gamma
 
-        self.pos = [0,0]    # Position of the robot
+        self.pos = np.zeros(2, dtype=int)    # Position of the robot
         # self.other_pos = [[0,0] for i in range(self.nrobot - 1)]   # Postion of the other rovers
         self.target_pos = [-1, -1]
-        self.Qnet = torch.nn.Sequential(torch.nn.Linear(2*nrobot+1+self.dim_x*self.dim_y, nhidden), torch.nn.Tanh(),
+        self.Qnet = torch.nn.Sequential(torch.nn.Linear(2*nrobot+2+self.dim_x*self.dim_y+1, nhidden), torch.nn.Tanh(),
                     torch.nn.Linear(nhidden, nhidden), torch.nn.Tanh(),
-                    torch.nn.Linear(nhidden, 4), torch.nn.Tanh())
-        self.targ_net = torch.nn.Sequential(torch.nn.Linear(2*nrobot+1+self.dim_x*self.dim_y+2, nhidden), torch.nn.Tanh(),
+                    torch.nn.Linear(nhidden, 1), torch.nn.Tanh())
+        self.Qnet.double()
+        self.targ_net = torch.nn.Sequential(torch.nn.Linear(2*nrobot+2+self.dim_x*self.dim_y+1, nhidden), torch.nn.Tanh(),
                     torch.nn.Linear(nhidden, nhidden), torch.nn.Tanh(),
-                    torch.nn.Linear(nhidden, 4), torch.nn.Tanh())
+                    torch.nn.Linear(nhidden, 1), torch.nn.Tanh())
+        self.targ_net.double()
         self.opt = torch.optim.Adam(self.Qnet.parameters(), lr = 1e-4)
 
     def reset(self):
@@ -35,8 +37,8 @@ class Robot:
         self.pos = pos
 
     # Inputted state should be the states of all robots in order then the 
-    # observed state of the world
-    def rand_action(self, state):
+    # position of the target then observed state of the world
+    def rand_action(self, state, eps):
         if rand.random() < eps:     # Take random action
             # Moves [0, 1, 2, 3] corresponds to up, right, down, left respectively
             moves = [0, 1, 2, 3]
@@ -48,35 +50,35 @@ class Robot:
                 moves.remove(2)
             if self.pos[1] == self.dim_y - 1:
                 moves.remove(0)
-            return random.choice(moves)
+            return rand.choice(moves)
         else:       # Use Q network
             acts = np.zeros(3)
             for i in range(3):
-                acts[i] = self.Qnet(np.append(state, i))
+                acts[i] = self.Qnet(torch.from_numpy(np.append(state, i)))
             return np.argmax(acts)
 
     # Function to update the Q network. Note that state should include the states of all of the robots
-    # (in order), the observed state of the world, then the action (0-3) in that order
+    # (in order), target_pos, the observed state of the world, then the action (0-3) in that order
     def update_net(self, state, reward):
         x = torch.from_numpy(state)
         pred_q = self.Qnet(x)
-        targ_q = reward + self.gamma * self.targ_net(x)
-        loss = torch.nn.MSELoss(pred_q, targ_q)
+        targ_q = reward + self.gamma * self.targ_net(x).detach()
+        loss_fn = torch.nn.MSELoss()
+        loss = loss_fn(pred_q, targ_q)
         self.opt.zero_grad()
         loss.backward()
         self.opt.step()
 
-    def check_goal(self):
-        for i in range(self.nrover):
-            if self.rover_pos[i] == self.target_pos:
-                return True
+    def check_goal(self, targ):
+        if (self.pos == targ).all():
+            return True
         return False
 
 
 class ground_robot(Robot):
-    def __init__(self, size_x, size_y, nrobot, nhidden):
-        Robot.__init__(self, size_x, size_y, 1, nrobot, nhidden)
+    def __init__(self, size_x, size_y, nrobot, nhidden, eps, gamma):
+        Robot.__init__(self, size_x, size_y, 1, nrobot, nhidden, eps, gamma)
 
 class UAV(Robot):
-    def __init__(self, size_x, size_y, nrobot, nhidden):
-        Robot.__init__(self, size_x, size_y, 4, nrobot, nhidden)
+    def __init__(self, size_x, size_y, nrobot, nhidden, eps, gamma):
+        Robot.__init__(self, size_x, size_y, 4, nrobot, nhidden, eps, gamma)

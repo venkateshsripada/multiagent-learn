@@ -33,9 +33,11 @@ class GridWorld:
         self.nground = nground                          # Number of ground robots
         self.nUAV = nUAV                                # Number of UAV robots
         self.T = T                                      # Length of each episode
+        self.timestep = 0                               # Current timestep
         self.niter = niter                              # Number of iterations to train
         self.targ_pos = targ_pos                        # Position of the target
         self.obs_states = np.zeros((size_y, size_x))    # Current observed states. 0=hidden, 1=observed
+        self.num_obs = 0                                # Number of states that have currently been observed
         self.rovers = [0 for i in range(self.nrover)]   # Array of Task_Rover objects
         
         # Construct the rovers
@@ -43,30 +45,38 @@ class GridWorld:
             self.rovers[i] = Robot.ground_robot(self.dim_x, self.dim_y, self.nrover, 64, .1, .9)
         for i in range(nUAV):
             self.rovers[nground + i] = Robot.UAV(self.dim_x, self.dim_y, self.nrover, 64, .1, .9)
-        print(self.rovers)
 
-    def reset
+    def reset(self):
+        self.timestep = 0
+        for i in range(self.nrover):
+            self.rovers[i].pos = np.zeros(2, dtype=int)
+        self.targ_pos = np.array([random.randrange(self.dim_x), random.randrange(self.dim_y)])
+        
 
     # Function to visualize the current state of the grid world
     def visualize(self):
-        grid = [['-' for _ in range(self.dim_x)] for _ in range(self.dim_y)]
+        grid = [['x' for _ in range(self.dim_x)] for _ in range(self.dim_y)]
         
         drone_symbol_bank = ['1', '2', '3', '4']
+        for i in range(self.dim_x):
+            for j in range(self.dim_y):
+                if self.obs_states[j, i] == 1:
+                    grid[j][i] = '-'
         for i in range(self.nrover):
             rov_pos = self.rovers[i].get_pos()
             x = int(rov_pos[0])
             y = int(rov_pos[1])
-            if grid[y][x] == '-':
+            if grid[y][x] == 'x' or grid[y][x] == '-':
                 grid[y][x] = str(i)
             else:
                 grid[y][x] += str(i)
 
-        # Draw in target ('-T' means the target is hidden)
+        # Draw in target ('xT' means the target is hidden)
         x = int(self.targ_pos[0])
         y = int(self.targ_pos[1])
         sym = 'T'
         if self.obs_states[y, x] == 0:   # Target is hidden
-            sym = '-T'
+            sym = 'xT'
         grid[y][x] = sym
 
         for row in grid:
@@ -76,17 +86,19 @@ class GridWorld:
     # Update the observed state of the world given that the $index-th robot made move $move
     # Todo: make more efficient, if know the move the robot made previously, don't have to check
     # the entire radius, just the changed states
-    def update_obs(move, index):
-        obs_len = self.rovers[i].obs_radius
+    def update_obs(self, move, index):
+        obs_len = self.rovers[index].obs_radius
         # Loop through y
-        for i in range(max(0, self.rover_pos[i][1]-obs_len), min(self.dim_y, self.rover_pos[i][1]+obs_len)):
+        for i in range(max(0, self.rovers[index].pos[1]-obs_len), min(self.dim_y, self.rovers[index].pos[1]+obs_len)):
             # Loop through x
-            for j in range(max(0, self.rover_pos[i][0]-obs_len), min(self.dim_x, self.rover_pos[i][0]+obs_len)):
-                self.obs_states[i, j] = 1
+            for j in range(max(0, self.rovers[index].pos[0]-obs_len), min(self.dim_x, self.rovers[index].pos[0]+obs_len)):
+                if self.obs_states[i, j] == 0:
+                    self.obs_states[i, j] = 1
+                    self.num_obs += 1
 
 
     # Updates state of the world given the array of robot actions
-    # For actions: 0=right, 1=down, 2=left, 3=up
+    # For actions: 0=up, 1=right, 2=down, 3=left
     def step(self, action, visual = False):
         self.timestep += 1
 
@@ -94,14 +106,13 @@ class GridWorld:
         for i in range(self.nrover):
             move = [-1, 0]
             if action[i] == 0:
-                move = [0, 1]
+                move = [0, -1]
             elif action[i] == 1:
                 move = [1, 0]
             elif action[i] == 2:
-                move = [0, -1]
-            return move
-            self.rovers[i].pos = list(map(add, self.rovers[i].pos, move))
-            update_obs(move, i)
+                move = [0, 1]
+            self.rovers[i].pos = self.rovers[i].pos + np.array(move)#list(map(add, self.rovers[i].pos, move))
+            self.update_obs(move, i)
             # Check pos limits, make sure not out of bounds
             if self.rovers[i].pos[0] < 0:
                 self.rovers[i].pos[0] = 0
@@ -112,15 +123,75 @@ class GridWorld:
             if self.rovers[i].pos[1] >= self.dim_y:
                 self.rovers[i].pos[1] = self.dim_y - 1
 
-            if self.rovers[i].check_goal():
+            if self.rovers[i].check_goal(self.targ_pos):
                 reached_goal = True
 
         if visual:
             self.visualize()
-
+            input()
         return reached_goal
     
-    def train(niter):
+    def reward(self):
+        obs_reward = 2*self.num_obs / (self.dim_x*self.dim_y)
+        rewards = np.ones(self.nrover)*obs_reward
+        # If target pos is known, ground robot gets additional reward
+        if (self.obs_states[self.targ_pos[1], self.targ_pos[0]] == 1):
+            rewards[0] += np.linalg.norm(self.rovers[0].pos - self.targ_pos)
+        return rewards
+
+    def train(self):
+        for k in range(self.niter):
+            self.reset()
+            for j in range(self.T):
+                # Get actions
+                acts = np.zeros(self.nrover)
+                state = self.rovers[0].pos
+                for i in range(1, self.nrover):
+                    state = np.append(state, self.rovers[i].pos)
+                if (self.obs_states[self.targ_pos[1], self.targ_pos[0]] == 0):
+                    state = np.append(state, [-1,-1])
+                else:
+                    state = np.append(state, self.targ_pos)
+                state = np.append(state, self.obs_states.flatten())
+                for i in range(self.nrover):
+                    acts[i] = self.rovers[i].rand_action(state, .1)
+                done = self.step(acts)
+                if not done:
+                    rew = self.reward()
+                    for i in range(self.nrover):
+                        self.rovers[i].update_net(np.append(state, acts[i]), rew[i])
+                else:
+                    break
+            if k % 10 == 0:
+                print("Iteration: " + str(k))
+                self.eval()
+                for i in range(self.nrover):
+                    self.rovers[i].targ_net.load_state_dict(self.rovers[i].Qnet.state_dict())
+        for i in range(self.nrover):
+            torch.save(self.rovers[i].Qnet.state_dict(), "./models/model"+str(i)+".pth")
+
+    def eval(self, visual=False):
+        self.reset()
+        self.targ_pos = np.array([self.dim_x-1, self.dim_y-1])
+        done = False
+        counter = 0
+        while not done and counter < 100:
+            counter += 1
+            acts = np.zeros(self.nrover)
+            state = self.rovers[0].pos
+            for i in range(1, self.nrover):
+                state = np.append(state, self.rovers[i].pos)
+            if (self.obs_states[self.targ_pos[1], self.targ_pos[0]] == 0):
+                state = np.append(state, [-1,-1])
+            else:
+                state = np.append(state, self.targ_pos)
+            state = np.append(state, self.obs_states.flatten())
+            for i in range(self.nrover):
+                acts[i] = self.rovers[i].rand_action(state, 0.0)
+            print(acts)
+            done = self.step(acts, visual)
+        print("Time to capture: " + str(self.timestep))
+
 
     def render(self):
         # Visualize
@@ -148,15 +219,20 @@ class GridWorld:
 
         print ('------------------------------------------------------------------------')
 
+    def test_model(self, path):
+        for i in range(self.nrover):
+            self.rovers[i].Qnet.load_state_dict(torch.load(path+str(i)+".pth"))
+        self.eval(True)
 
 
 if __name__ == '__main__':
     
-    env = GridWorld(10, 10, 100, 500, 1, 3, [3,3])
-    env.visualize()
-    # for i in range(20):
-    #     env.visualize()
-    #     input()
+    env = GridWorld(10, 10, 100, 500, 1, 3, [9, 9])
+    # acts = [1, 2, 2, 1]
+    # env.step(acts, True)
+    # env.reset()
+    # env.train()
+    env.test_model("./models/model")
  
 
 
