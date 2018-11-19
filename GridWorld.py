@@ -2,6 +2,8 @@ import random
 from random import randint
 from operator import add
 import numpy as np
+from multiprocessing import Process
+import copy
 import math
 import time
 import torch
@@ -53,6 +55,7 @@ class GridWorld:
             self.rovers[i].pos = np.zeros(2, dtype=int)
         # self.targ_pos = np.array([random.randrange(self.dim_x), random.randrange(self.dim_y)])
         self.targ_pos = np.array([9,9])
+        self.obs_states[9, 9] = 1
         observed = self.update_obs(0, 1)
         for s in observed:
             if self.obs_states[s[0], s[1]] == 0:
@@ -111,7 +114,6 @@ class GridWorld:
     def step(self, action, visual = False):
         self.timestep += 1
         hit_wall = [False]*self.nrover
-        reached_goal = False
         change_states = [None] * self.nrover
         diff_obs = np.zeros(self.nrover)
         for i in range(self.nrover):
@@ -137,8 +139,7 @@ class GridWorld:
             if self.rovers[i].pos[1] >= self.dim_y:
                 self.rovers[i].pos[1] = self.dim_y - 1
                 hit_wall[i] = True
-        if self.rovers[0].check_goal(self.targ_pos):
-            reached_goal = True
+        reached_goal = self.rovers[0].check_goal(self.targ_pos)
         # Update observe states
         for i in range(self.nrover):
             states = change_states[i]
@@ -153,9 +154,12 @@ class GridWorld:
     
     def global_rew(self, num_obs, dist, hit_wall, do_targ=True):
         out = num_obs
+        out -= 1    # Penalty for doing nothing     
         # if (self.obs_states[self.targ_pos[1], self.targ_pos[0]] == 1) and do_targ:
-        out -= dist
-        out -= sum(hit_wall)*(-5)
+        out = -dist
+        # if dist == 0:
+            # out = -1
+        # out += sum(hit_wall)*(-5)
         return out
 
     # Do difference rewards
@@ -169,7 +173,7 @@ class GridWorld:
                 temp_set = temp_set - change_states[j]
             diff_obs = len(temp_set)
             do_targ = True
-            if (self.targ_pos[0], self.targ_pos[1]) in temp_set:
+            if (self.targ_pos[1], self.targ_pos[0]) in temp_set:
                 do_targ = False
             change_hit = False
             if hit_wall[i] == True:
@@ -193,13 +197,15 @@ class GridWorld:
 
     def train(self, do_time=False):
         evals = np.zeros(self.niter)
+        eps=.4
+        # rewards = np.zeros(self.niter)
         for k in range(self.niter):
             self.reset()
             iter_t = time.clock()
+            total_rew = 0
             for j in range(self.T):
-                # Get actions
-                acts = np.zeros(self.nrover)
-                t = time.clock()
+                # print("timestep: ", j)
+                # Form the input state
                 state = self.rovers[0].pos
                 for i in range(1, self.nrover):
                     state = np.append(state, self.rovers[i].pos)
@@ -210,26 +216,27 @@ class GridWorld:
                 state = np.append(state, self.obs_states.flatten())
                 if do_time:
                     print("Formed state: ", time.clock() - t)
-                t = time.clock()
+                # Get actions
+                acts = np.zeros(self.nrover)
                 for i in range(self.nrover):
-                    acts[i] = self.rovers[i].rand_action(state)
-                if do_time:
-                    print("Computed actions: ", time.clock() - t)
-                t = time.clock()
+                    acts[i] = self.rovers[i].rand_action(state, eps, False)
+                if eps > .05:
+                    eps = eps*.99
                 prev_dist = np.linalg.norm(self.rovers[0].pos - self.targ_pos, ord=1)
                 done, change_states, hit_wall = self.step(acts)
                 new_dist = np.linalg.norm(self.rovers[0].pos - self.targ_pos, ord=1)
-                if do_time:
-                    print("Took step: ", time.clock()-t)
                 if not done:
-                    t = time.clock()
                     total_states = set()
                     for i in range(self.nrover):
-                        total_states = total_states|change_states[i]
-                    
+                        total_states = total_states|change_states[i]    
                     rew = self.diff_reward(change_states, len(total_states), new_dist-prev_dist, hit_wall)
+                    p_list = [None]*self.nrover
                     for i in range(self.nrover):
                         self.rovers[i].update_net(np.append(state, acts[i]), rew[i])
+                        # p_list[i] = Process(target=self.rovers[i].update_net(), args=((np.append(state, acts[i]), rew[i])))
+                        # p_list[i].start()
+                    # for i in range(self.nrover):
+                        # p_list[i].join()
                     if do_time:
                         print("Updated networks: ", time.clock() - t)
                 else:
@@ -240,12 +247,13 @@ class GridWorld:
                 for i in range(self.nrover):
                     self.rovers[i].targ_net.load_state_dict(self.rovers[i].Qnet.state_dict())
                 for i in range(self.nrover):
-                    torch.save(self.rovers[i].Qnet.state_dict(), "./models/hitwall_model"+str(i)+".pth")
+                    torch.save(self.rovers[i].Qnet.state_dict(), "./models/epsgreed_model"+str(i)+".pth")
             evals[k] = self.eval_fn(done)
+            # rewards[k] = total_rew
             print("Iteration " + str(k) + ": Eval = " + str(evals[k])+"\tTime = " + str(round(time.clock() - iter_t, 4))
                     +"\tTarg_pos: [" + str(self.targ_pos[0])+", "+str(self.targ_pos[1])+"]")
         for i in range(self.nrover):
-            torch.save(self.rovers[i].Qnet.state_dict(), "./models/hitwall_model"+str(i)+".pth")
+            torch.save(self.rovers[i].Qnet.state_dict(), "./models/epsgreed_model"+str(i)+".pth")
         return evals
 
     def eval(self, visual=False):
@@ -265,9 +273,15 @@ class GridWorld:
                 state = np.append(state, self.targ_pos)
             state = np.append(state, self.obs_states.flatten())
             for i in range(self.nrover):
-                acts[i] = self.rovers[i].rand_action(state, False)
+                acts[i] = self.rovers[i].rand_action(state, 0, False)
             # print(acts)
+            # prev_dist = np.linalg.norm(self.rovers[0].pos - self.targ_pos, ord=1)
             done, change_states, hit_wall = self.step(acts, visual)
+            # new_dist = np.linalg.norm(self.rovers[0].pos - self.targ_pos, ord=1)
+            # total_states = set()
+            # for i in range(self.nrover):
+                # total_states = total_states|change_states[i]
+            # print(self.global_rew(len(total_states), new_dist-prev_dist, hit_wall))
         print("Time to capture: " + str(self.timestep))
 
 
@@ -307,30 +321,36 @@ class GridWorld:
 
 if __name__ == '__main__':
     
-    env = GridWorld(10, 10, 100, 100, 1, 3, [9, 9])
-    acts = [0, 1, 0, 2]
+    env = GridWorld(10, 10, 200, 100, 1, 3, [9, 9])
+    acts = [0, 1, 1, 0]
    #  for i in range(10):
     # env.step(acts)
       # print(env.reward())
     # env.reset()
     # env.targ_pos = [3, 3]
     # prev_dist = np.linalg.norm(env.rovers[0].pos - env.targ_pos, ord=1)
-    # done, change_states = env.step(acts)
+    # done, change_states, hit_wall = env.step(acts)
     # new_dist = np.linalg.norm(env.rovers[0].pos - env.targ_pos, ord=1)
+    # total_states = set()
+    # for i in range(env.nrover):
+    #     total_states = total_states|change_states[i]
+    # print(env.diff_reward(change_states, len(total_states), new_dist-prev_dist, hit_wall))
+    # print(new_dist-prev_dist)
+    # print(hit_wall)
     # total_states = set()
     # for i in range(env.nrover):
     #     total_states = total_states|change_states[i]
     # rew = env.diff_reward(change_states, len(total_states), new_dist-prev_dist)    
     # print(rew)
-    # rews = env.train()
-    # plt.plot(range(100), rews)
-    # plt.xlabel("Iterations")
-    # plt.ylabel("Final Reward")
-    # plt.title("Learning curve of DQN")
-    # plt.draw()
-    # plt.savefig("./testfig.png")
+    rews = env.train()
+    plt.plot(range(100), rews)
+    plt.xlabel("Iterations")
+    plt.ylabel("Final Reward")
+    plt.title("Learning curve of DQN")
+    plt.draw()
+    plt.savefig("./eps_greed.png")
     # print(rews)
-    env.test_model("./models/hitwall_model")
+    # env.test_model("./models/long_model")
  
 
 
