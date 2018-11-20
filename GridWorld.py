@@ -7,25 +7,21 @@ import copy
 import math
 import time
 import torch
+import threading
 import Robot
 import matplotlib.pyplot as plt
 
-class Parameters:
-    def __init__(self):
+class myThread (threading.Thread):
+    def __init__(self, rover, state, reward):
+        threading.Thread.__init__(self)
+        self.rover = rover
+        self.state = state
+        self.reward = reward
 
-        #Rover domain
-        self.dim_x = 10
-        self.dim_y = 5 #HOW BIG IS THE ROVER WORLD
-        self.action_dim = 4
-        self.nrover = 1
-        self.T = 100
-        self.nrollout = 10
-        self.obs_radius = 15 #OBSERVABILITY FOR EACH ROVER
-        self.act_dist = 1.5 #DISTANCE AT WHICH A POI IS CONSIDERED ACTIVATED (OBSERVED) BY A ROVER
-        self.angle_res = 30 #ANGLE RESOLUTION OF THE QUASI-SENSOR THAT FEEDS THE OBSERVATION VECTOR
-        self.num_poi = 10 #NUM OF POIS
-        self.num_rover = 4 #NUM OF ROVERS
-        self.num_timestep = 25 #TIMESTEP PER EPISODE
+    def run(self):
+        # threadLock.acquire()
+        self.rover.update_net(self.state, self.reward)
+        # threadLock.release()
 
 class GridWorld:
     def __init__(self, size_x, size_y, T, niter, nground, nUAV, targ_pos):
@@ -196,6 +192,7 @@ class GridWorld:
 
 
     def train(self, do_time=False):
+        print("start training")
         evals = np.zeros(self.niter)
         eps=.4
         # rewards = np.zeros(self.niter)
@@ -206,6 +203,7 @@ class GridWorld:
             for j in range(self.T):
                 # print("timestep: ", j)
                 # Form the input state
+                t = time.clock()
                 state = self.rovers[0].pos
                 for i in range(1, self.nrover):
                     state = np.append(state, self.rovers[i].pos)
@@ -217,11 +215,12 @@ class GridWorld:
                 if do_time:
                     print("Formed state: ", time.clock() - t)
                 # Get actions
+                t = time.clock()
                 acts = np.zeros(self.nrover)
                 for i in range(self.nrover):
                     acts[i] = self.rovers[i].rand_action(state, eps, False)
-                if eps > .05:
-                    eps = eps*.99
+                if do_time:
+                    print("Computed states: ", time.clock() - t)
                 prev_dist = np.linalg.norm(self.rovers[0].pos - self.targ_pos, ord=1)
                 done, change_states, hit_wall = self.step(acts)
                 new_dist = np.linalg.norm(self.rovers[0].pos - self.targ_pos, ord=1)
@@ -230,30 +229,36 @@ class GridWorld:
                     for i in range(self.nrover):
                         total_states = total_states|change_states[i]    
                     rew = self.diff_reward(change_states, len(total_states), new_dist-prev_dist, hit_wall)
-                    p_list = [None]*self.nrover
-                    for i in range(self.nrover):
-                        self.rovers[i].update_net(np.append(state, acts[i]), rew[i])
-                        # p_list[i] = Process(target=self.rovers[i].update_net(), args=((np.append(state, acts[i]), rew[i])))
-                        # p_list[i].start()
+                    threads = [None]*self.nrover
+                    t = time.clock()
                     # for i in range(self.nrover):
-                        # p_list[i].join()
+                    #     threads[i] = myThread(self.rovers[i], np.append(state, acts[i]), rew[i])
+                    for i in range(self.nrover):
+                        # threads[i].start()
+                        self.rovers[i].update_net(np.append(state, acts[i]), rew[i])
+                        # if do_time:
+                            # print("Updated network " + str(i) +": ", time.clock() - t)
+                    # for i in range(self.nrover):
+                    #     threads[i].join()
                     if do_time:
-                        print("Updated networks: ", time.clock() - t)
+                        print("Updated networks: ", time.clock()-t)
                 else:
                     break
-            if k % 10 == 0:
+            if True: #k % 10 == 0:
                 print("Iteration: " + str(k))
                 self.eval()
                 for i in range(self.nrover):
                     self.rovers[i].targ_net.load_state_dict(self.rovers[i].Qnet.state_dict())
                 for i in range(self.nrover):
-                    torch.save(self.rovers[i].Qnet.state_dict(), "./models/epsgreed_model"+str(i)+".pth")
+                    torch.save(self.rovers[i].Qnet.state_dict(), "./models/tanh_model"+str(i)+".pth")
             evals[k] = self.eval_fn(done)
+            if eps > .05:
+                eps = eps*.98
             # rewards[k] = total_rew
             print("Iteration " + str(k) + ": Eval = " + str(evals[k])+"\tTime = " + str(round(time.clock() - iter_t, 4))
                     +"\tTarg_pos: [" + str(self.targ_pos[0])+", "+str(self.targ_pos[1])+"]")
         for i in range(self.nrover):
-            torch.save(self.rovers[i].Qnet.state_dict(), "./models/epsgreed_model"+str(i)+".pth")
+            torch.save(self.rovers[i].Qnet.state_dict(), "./models/tanh_model"+str(i)+".pth")
         return evals
 
     def eval(self, visual=False):
@@ -348,9 +353,9 @@ if __name__ == '__main__':
     plt.ylabel("Final Reward")
     plt.title("Learning curve of DQN")
     plt.draw()
-    plt.savefig("./eps_greed.png")
+    plt.savefig("./tanh_greed.png")
     # print(rews)
-    # env.test_model("./models/long_model")
+    # env.test_model("./models/epsgreed_model")
  
 
 

@@ -27,22 +27,22 @@ class Robot:
         self.target_pos = [-1, -1]
         self.Qnet = torch.nn.Sequential(
                     torch.nn.Linear(2*nrobot+2+self.dim_x*self.dim_y+1, nhidden),
-                    torch.nn.Sigmoid(),
+                    torch.nn.Tanh(),
                     torch.nn.Linear(nhidden, nhidden), 
-                    torch.nn.Sigmoid(),
+                    torch.nn.Tanh(),
                     torch.nn.Linear(nhidden, 1), 
-                    torch.nn.Sigmoid()
+                    torch.nn.ReLU()
                     )
         for param in self.Qnet.parameters():
             torch.nn.init.normal_(param)
-        self.targ_net = torch.nn.Sequential(torch.nn.Linear(2*nrobot+2+self.dim_x*self.dim_y+1, nhidden), torch.nn.Sigmoid(),
-                    torch.nn.Linear(nhidden, nhidden), torch.nn.Sigmoid(),
-                    torch.nn.Linear(nhidden, 1), torch.nn.Sigmoid())
+        self.targ_net = torch.nn.Sequential(torch.nn.Linear(2*nrobot+2+self.dim_x*self.dim_y+1, nhidden), torch.nn.Tanh(),
+                    torch.nn.Linear(nhidden, nhidden), torch.nn.Tanh(),
+                    torch.nn.Linear(nhidden, 1), torch.nn.ReLU())
         for param in self.targ_net.parameters():
             torch.nn.init.normal_(param)
         self.opt = torch.optim.Adam(self.Qnet.parameters(), lr = 1e-3)
-        self.buff_state = [torch.Tensor(2*nrobot+2+self.dim_x*self.dim_y+1) for i in range(100)]
-        self.buff_reward = [torch.Tensor(1) for i in range(100)]
+        self.buff_state = [torch.Tensor(2*nrobot+2+self.dim_x*self.dim_y+1) for i in range(1000)]
+        self.buff_reward = [torch.Tensor(1) for i in range(1000)]
         self.buff_count = 0
         self.buff_filled = False
 
@@ -109,7 +109,7 @@ class Robot:
         if self.buff_count == 100:
             self.buff_filled = True
             self.buff_count = 0
-        batch_size = 32
+        batch_size = 64
         if not self.buff_filled and self.buff_count < batch_size:
             batch_size = self.buff_count
         # Sample batch
@@ -142,8 +142,9 @@ class Robot:
         # print(np.linalg.norm(new_w-prev_w))
 
     def forward(self, model, state):
-        out = model(state)
-        return out*self.max_val
+        # out = model(state)
+        # return out*self.max_val
+        return model(state)
 
 
     def check_goal(self, targ):
