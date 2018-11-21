@@ -51,6 +51,7 @@ class GridWorld:
             self.rovers[i].pos = np.zeros(2, dtype=int)
         # self.targ_pos = np.array([random.randrange(self.dim_x), random.randrange(self.dim_y)])
         self.targ_pos = np.array([9,9])
+        self.obs_states = np.zeros((self.dim_x, self.dim_y))
         self.obs_states[9, 9] = 1
         observed = self.update_obs(0, 1)
         for s in observed:
@@ -95,9 +96,9 @@ class GridWorld:
         change_states = set()   # Set of new states that the rover observed
         obs_len = self.rovers[index].obs_radius
         # Loop through y
-        for i in range(max(0, self.rovers[index].pos[1]-obs_len), min(self.dim_y, self.rovers[index].pos[1]+obs_len)):
+        for i in range(max(0, self.rovers[index].pos[1]-obs_len), min(self.dim_y, self.rovers[index].pos[1]+obs_len+1)):
             # Loop through x
-            for j in range(max(0, self.rovers[index].pos[0]-obs_len), min(self.dim_x, self.rovers[index].pos[0]+obs_len)):
+            for j in range(max(0, self.rovers[index].pos[0]-obs_len), min(self.dim_x, self.rovers[index].pos[0]+obs_len+1)):
                 if self.obs_states[i, j] == 0:
                     change_states.add((i, j))
                     # self.obs_states[i, j] = 1
@@ -151,11 +152,9 @@ class GridWorld:
     def global_rew(self, num_obs, dist, hit_wall, do_targ=True):
         out = num_obs
         out -= 1    # Penalty for doing nothing     
-        # if (self.obs_states[self.targ_pos[1], self.targ_pos[0]] == 1) and do_targ:
-        out = -dist
-        # if dist == 0:
-            # out = -1
-        # out += sum(hit_wall)*(-5)
+        if (self.obs_states[self.targ_pos[1], self.targ_pos[0]] == 1) and do_targ:
+            out = -dist
+        out += sum(hit_wall)*(-1)
         return out
 
     # Do difference rewards
@@ -188,7 +187,8 @@ class GridWorld:
             return -1
         else:
             min_time = np.linalg.norm(self.targ_pos, ord=1)
-            return (self.timestep - min_time) / (self.T-min_time)
+            return self.timestep
+            #return (self.timestep - min_time) / (self.T-min_time)
 
 
     def train(self, do_time=False):
@@ -201,7 +201,6 @@ class GridWorld:
             iter_t = time.clock()
             total_rew = 0
             for j in range(self.T):
-                # print("timestep: ", j)
                 # Form the input state
                 t = time.clock()
                 state = self.rovers[0].pos
@@ -217,43 +216,42 @@ class GridWorld:
                 # Get actions
                 t = time.clock()
                 acts = np.zeros(self.nrover)
-                for i in range(self.nrover):
-                    acts[i] = self.rovers[i].rand_action(state, eps, False)
+                acts[0] = self.rovers[0].rand_action(state, eps, False)
+                #for i in range(self.nrover):
+                #    acts[i] = self.rovers[i].rand_action(state, eps, False)
                 if do_time:
                     print("Computed states: ", time.clock() - t)
+                acts[1] = 0
+                acts[2] = 0
+                acts[3] = 0
                 prev_dist = np.linalg.norm(self.rovers[0].pos - self.targ_pos, ord=1)
                 done, change_states, hit_wall = self.step(acts)
                 new_dist = np.linalg.norm(self.rovers[0].pos - self.targ_pos, ord=1)
                 if not done:
-                    total_states = set()
-                    for i in range(self.nrover):
-                        total_states = total_states|change_states[i]    
-                    rew = self.diff_reward(change_states, len(total_states), new_dist-prev_dist, hit_wall)
-                    threads = [None]*self.nrover
+                    #total_states = set()
+                    #for i in range(self.nrover):
+                    #    total_states = total_states|change_states[i]    
+                    #rew = self.diff_reward(change_states, len(total_states), new_dist-prev_dist, hit_wall)
+                    #threads = [None]*self.nrover
+                    rew = np.zeros(4)
+                    rew[0] = self.global_rew(0, new_dist-prev_dist, hit_wall)
                     t = time.clock()
-                    # for i in range(self.nrover):
-                    #     threads[i] = myThread(self.rovers[i], np.append(state, acts[i]), rew[i])
-                    for i in range(self.nrover):
-                        # threads[i].start()
-                        self.rovers[i].update_net(np.append(state, acts[i]), rew[i])
-                        # if do_time:
-                            # print("Updated network " + str(i) +": ", time.clock() - t)
-                    # for i in range(self.nrover):
-                    #     threads[i].join()
+                    self.rovers[0].update_net(np.append(state, acts[0]), rew[0])
+                    #for i in range(self.nrover):
+                    #    self.rovers[i].update_net(np.append(state, acts[i]), rew[i])
+                        #if do_time:
+                            #print("Updated network " + str(i) +": ", time.clock() - t)
                     if do_time:
                         print("Updated networks: ", time.clock()-t)
                 else:
                     break
-            if True: #k % 10 == 0:
-                print("Iteration: " + str(k))
-                self.eval()
+            if True: #k % 5 == 0:
                 for i in range(self.nrover):
                     self.rovers[i].targ_net.load_state_dict(self.rovers[i].Qnet.state_dict())
                 for i in range(self.nrover):
                     torch.save(self.rovers[i].Qnet.state_dict(), "./models/tanh_model"+str(i)+".pth")
             evals[k] = self.eval_fn(done)
-            if eps > .05:
-                eps = eps*.98
+            eps = eps*.98
             # rewards[k] = total_rew
             print("Iteration " + str(k) + ": Eval = " + str(evals[k])+"\tTime = " + str(round(time.clock() - iter_t, 4))
                     +"\tTarg_pos: [" + str(self.targ_pos[0])+", "+str(self.targ_pos[1])+"]")
@@ -279,14 +277,11 @@ class GridWorld:
             state = np.append(state, self.obs_states.flatten())
             for i in range(self.nrover):
                 acts[i] = self.rovers[i].rand_action(state, 0, False)
-            # print(acts)
-            # prev_dist = np.linalg.norm(self.rovers[0].pos - self.targ_pos, ord=1)
+            acts[1] = 0
+            acts[2] = 0
+            acts[3] = 0
+            #print(acts)
             done, change_states, hit_wall = self.step(acts, visual)
-            # new_dist = np.linalg.norm(self.rovers[0].pos - self.targ_pos, ord=1)
-            # total_states = set()
-            # for i in range(self.nrover):
-                # total_states = total_states|change_states[i]
-            # print(self.global_rew(len(total_states), new_dist-prev_dist, hit_wall))
         print("Time to capture: " + str(self.timestep))
 
 
@@ -319,34 +314,10 @@ class GridWorld:
     def test_model(self, path):
         for i in range(self.nrover):
             self.rovers[i].Qnet.load_state_dict(torch.load(path+str(i)+".pth"))
-            # for param in self.rovers[i].Qnet.parameters():
-            #     print(param)
         self.eval(True)
 
-
-if __name__ == '__main__':
-    
-    env = GridWorld(10, 10, 200, 100, 1, 3, [9, 9])
-    acts = [0, 1, 1, 0]
-   #  for i in range(10):
-    # env.step(acts)
-      # print(env.reward())
-    # env.reset()
-    # env.targ_pos = [3, 3]
-    # prev_dist = np.linalg.norm(env.rovers[0].pos - env.targ_pos, ord=1)
-    # done, change_states, hit_wall = env.step(acts)
-    # new_dist = np.linalg.norm(env.rovers[0].pos - env.targ_pos, ord=1)
-    # total_states = set()
-    # for i in range(env.nrover):
-    #     total_states = total_states|change_states[i]
-    # print(env.diff_reward(change_states, len(total_states), new_dist-prev_dist, hit_wall))
-    # print(new_dist-prev_dist)
-    # print(hit_wall)
-    # total_states = set()
-    # for i in range(env.nrover):
-    #     total_states = total_states|change_states[i]
-    # rew = env.diff_reward(change_states, len(total_states), new_dist-prev_dist)    
-    # print(rew)
+def train_whole():
+    env = GridWorld(10, 10, 250, 200, 1, 3, [9, 9])
     rews = env.train()
     plt.plot(range(100), rews)
     plt.xlabel("Iterations")
@@ -354,8 +325,18 @@ if __name__ == '__main__':
     plt.title("Learning curve of DQN")
     plt.draw()
     plt.savefig("./tanh_greed.png")
-    # print(rews)
-    # env.test_model("./models/epsgreed_model")
+
+if __name__ == '__main__':
+    
+    #env = GridWorld(10, 10, 200, 100, 1, 3, [9, 9])
+    #print(env.rovers[0].pos[0], env.rovers[0].pos[1])
+    #acts = [0, 1, 1, 0]
+   #  for i in range(10):
+    # env.step(acts)
+      # print(env.reward())
+    #train_whole()
+    env = GridWorld(10, 10, 200, 100, 1, 3, [9, 9])
+    env.test_model("./models/tanh_model")
  
 
 
