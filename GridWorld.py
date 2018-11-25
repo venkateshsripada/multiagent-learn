@@ -24,7 +24,7 @@ class myThread (threading.Thread):
         # threadLock.release()
 
 class GridWorld:
-    def __init__(self, size_x, size_y, T, niter, nground, nUAV, targ_pos):
+    def __init__(self, size_x, size_y, T, niter, nground, nUAV, targ_pos, filename):
         #Rover domain
         self.dim_x = size_x                             # x dimension of the grid world
         self.dim_y = size_y                             # y dimension of the grid world
@@ -38,6 +38,7 @@ class GridWorld:
         self.obs_states = np.zeros((size_y, size_x))    # Current observed states. 0=hidden, 1=observed
         self.num_obs = 0                                # Number of states that have currently been observed
         self.rovers = [0 for i in range(self.nrover)]   # Array of Task_Rover objects
+        self.filename = filename                        # Filename of model to save to
         
         # Construct the rovers
         for i in range(nground):
@@ -49,11 +50,10 @@ class GridWorld:
         self.timestep = 0
         for i in range(self.nrover):
             self.rovers[i].pos = np.zeros(2, dtype=int)
-        # self.targ_pos = np.array([random.randrange(self.dim_x), random.randrange(self.dim_y)])
-        self.targ_pos = np.array([9,9])
+        self.targ_pos = np.array([random.randrange(self.dim_x), random.randrange(self.dim_y)])
         self.obs_states = np.zeros((self.dim_x, self.dim_y))
-        self.obs_states[9, 9] = 1
         observed = self.update_obs(0, 1)
+        self.num_obs = 0
         for s in observed:
             if self.obs_states[s[0], s[1]] == 0:
                 self.obs_states[s[0], s[1]] = 1
@@ -184,17 +184,18 @@ class GridWorld:
 
     def eval_fn(self, reached_goal):
         if not reached_goal:
-            return -1
+            return 1
         else:
             min_time = np.linalg.norm(self.targ_pos, ord=1)
-            return self.timestep
-            #return (self.timestep - min_time) / (self.T-min_time)
+            #return self.timestep
+            return (self.timestep - min_time) / (self.T-min_time)
 
 
     def train(self, do_time=False):
         print("start training")
         evals = np.zeros(self.niter)
         eps=.4
+        targ_count = 0
         # rewards = np.zeros(self.niter)
         for k in range(self.niter):
             self.reset()
@@ -216,47 +217,52 @@ class GridWorld:
                 # Get actions
                 t = time.clock()
                 acts = np.zeros(self.nrover)
-                acts[0] = self.rovers[0].rand_action(state, eps, False)
-                #for i in range(self.nrover):
-                #    acts[i] = self.rovers[i].rand_action(state, eps, False)
+                #acts[0] = self.rovers[0].rand_action(state, eps, False)
+                for i in range(self.nrover):
+                    acts[i] = self.rovers[i].rand_action(state, eps, False)
                 if do_time:
                     print("Computed states: ", time.clock() - t)
-                acts[1] = 0
-                acts[2] = 0
-                acts[3] = 0
+                #acts[1] = 0
+                #acts[2] = 0
+                #acts[3] = 0
                 prev_dist = np.linalg.norm(self.rovers[0].pos - self.targ_pos, ord=1)
                 done, change_states, hit_wall = self.step(acts)
                 new_dist = np.linalg.norm(self.rovers[0].pos - self.targ_pos, ord=1)
                 if not done:
-                    #total_states = set()
-                    #for i in range(self.nrover):
-                    #    total_states = total_states|change_states[i]    
-                    #rew = self.diff_reward(change_states, len(total_states), new_dist-prev_dist, hit_wall)
-                    #threads = [None]*self.nrover
-                    rew = np.zeros(4)
-                    rew[0] = self.global_rew(0, new_dist-prev_dist, hit_wall)
+                    #if targ_count == 200:
+                    #    for i in range(self.nrover):
+                    #        self.rovers[i].targ_net.load_state_dict(self.rovers[i].Qnet.state_dict())
+                    #    targ_count = 0
+                    total_states = set()
+                    for i in range(self.nrover):
+                        total_states = total_states|change_states[i]    
+                    rew = self.diff_reward(change_states, len(total_states), new_dist-prev_dist, hit_wall)
+                    #rew = np.zeros(4)
+                    #rew[0] = self.global_rew(0, new_dist-prev_dist, hit_wall)
                     t = time.clock()
-                    self.rovers[0].update_net(np.append(state, acts[0]), rew[0])
-                    #for i in range(self.nrover):
-                    #    self.rovers[i].update_net(np.append(state, acts[i]), rew[i])
-                        #if do_time:
-                            #print("Updated network " + str(i) +": ", time.clock() - t)
+                    #self.rovers[0].update_net(np.append(state, acts[0]), rew[0])
+                    true_state = state
+                    if self.rovers[0].do_pad:
+                        true_state = self.rovers[0].pad_state(state)
+                    for i in range(self.nrover):
+                        self.rovers[i].update_net(np.append(true_state, acts[i]), rew[i])
                     if do_time:
                         print("Updated networks: ", time.clock()-t)
+                    #targ_count += 1
                 else:
                     break
             if True: #k % 5 == 0:
                 for i in range(self.nrover):
                     self.rovers[i].targ_net.load_state_dict(self.rovers[i].Qnet.state_dict())
                 for i in range(self.nrover):
-                    torch.save(self.rovers[i].Qnet.state_dict(), "./models/tanh_model"+str(i)+".pth")
+                    torch.save(self.rovers[i].Qnet.state_dict(), "./models/"+self.filename+str(i)+".pth")
             evals[k] = self.eval_fn(done)
-            eps = eps*.98
+            eps = eps*.95
             # rewards[k] = total_rew
             print("Iteration " + str(k) + ": Eval = " + str(evals[k])+"\tTime = " + str(round(time.clock() - iter_t, 4))
                     +"\tTarg_pos: [" + str(self.targ_pos[0])+", "+str(self.targ_pos[1])+"]")
         for i in range(self.nrover):
-            torch.save(self.rovers[i].Qnet.state_dict(), "./models/tanh_model"+str(i)+".pth")
+            torch.save(self.rovers[i].Qnet.state_dict(), "./models/"+self.filename+str(i)+".pth")
         return evals
 
     def eval(self, visual=False):
@@ -277,9 +283,6 @@ class GridWorld:
             state = np.append(state, self.obs_states.flatten())
             for i in range(self.nrover):
                 acts[i] = self.rovers[i].rand_action(state, 0, False)
-            acts[1] = 0
-            acts[2] = 0
-            acts[3] = 0
             #print(acts)
             done, change_states, hit_wall = self.step(acts, visual)
         print("Time to capture: " + str(self.timestep))
@@ -316,15 +319,19 @@ class GridWorld:
             self.rovers[i].Qnet.load_state_dict(torch.load(path+str(i)+".pth"))
         self.eval(True)
 
-def train_whole():
-    env = GridWorld(10, 10, 250, 200, 1, 3, [9, 9])
+def train_whole(loadfile = ""):
+    filename = "15pad_pretrain"
+    env = GridWorld(10, 10, 300, 250, 1, 3, [9, 9], filename)
+    if loadfile:
+        for i in range(env.nrover):
+            env.rovers[i].Qnet.load_state_dict(torch.load(loadfile+str(i)+".pth"))
     rews = env.train()
-    plt.plot(range(100), rews)
+    plt.plot(range(env.niter), rews)
     plt.xlabel("Iterations")
     plt.ylabel("Final Reward")
     plt.title("Learning curve of DQN")
     plt.draw()
-    plt.savefig("./tanh_greed.png")
+    plt.savefig(filename+".png")
 
 if __name__ == '__main__':
     
@@ -334,9 +341,11 @@ if __name__ == '__main__':
    #  for i in range(10):
     # env.step(acts)
       # print(env.reward())
-    #train_whole()
-    env = GridWorld(10, 10, 200, 100, 1, 3, [9, 9])
-    env.test_model("./models/tanh_model")
+    start_t = time.clock()
+    train_whole("./models/10pad_pretrain")
+    print("Total time: ", time.clock()-start_t)
+    #env = GridWorld(10, 10, 200, 100, 1, 3, [9, 9])
+    #env.test_model("./models/big_model")
  
 
 

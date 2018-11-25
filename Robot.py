@@ -18,6 +18,7 @@ class Qnet(torch.nn.Module):
         torch.nn.init.normal_(self.linear2.bias)
         torch.nn.init.normal_(self.linear3.weight)
         torch.nn.init.normal_(self.linear3.bias)
+        
 
     def forward(self, x):
         tanh_act = torch.nn.Tanh()
@@ -43,11 +44,19 @@ class Robot:
         self.eps = eps
         self.gamma = gamma
         self.max_val = (size_x*size_y+size_x+size_y)
+        self.true_x = 20
+        self.true_y = 20
+        self.do_pad = True
+
 
         self.pos = np.zeros(2, dtype=int)    # Position of the robot
         self.target_pos = [9, 9]
-        self.Qnet = Qnet(2*nrobot+2+self.dim_x*self.dim_y+1, nhidden)
-        self.targ_net = Qnet(2*nrobot+2+self.dim_x*self.dim_y+1, nhidden)
+        if self.do_pad:
+            self.Qnet = Qnet(2*nrobot+2+self.true_x*self.true_y+1, nhidden)
+            self.targ_net = Qnet(2*nrobot+2+self.true_x*self.true_y+1, nhidden)
+        else :
+            self.Qnet = Qnet(2*nrobot+2+self.dim_x*self.dim_y+1, nhidden)
+            self.targ_net = Qnet(2*nrobot+2+self.dim_x*self.dim_y+1, nhidden)
         # self.Qnet = torch.nn.Sequential(
         #             torch.nn.Linear(2*nrobot+2+self.dim_x*self.dim_y+1, nhidden),
         #             torch.nn.Tanh(),
@@ -63,8 +72,11 @@ class Robot:
         #             torch.nn.Linear(nhidden, 1), torch.nn.ReLU())
         # for param in self.targ_net.parameters():
         #     torch.nn.init.normal_(param)
-        self.opt = torch.optim.Adam(self.Qnet.parameters(), lr = 1e-4)
-        self.buff_state = [torch.Tensor(2*nrobot+2+self.dim_x*self.dim_y+1) for i in range(2000)]
+        self.opt = torch.optim.Adam(self.Qnet.parameters(), lr = 1e-3)
+        if self.do_pad:
+            self.buff_state = [torch.Tensor(2*nrobot+2+self.true_x*self.true_y+1) for i in range(2000)]
+        else:
+            self.buff_state = [torch.Tensor(2*nrobot+2+self.dim_x*self.dim_y+1) for i in range(2000)]
         self.buff_reward = [torch.Tensor(1) for i in range(2000)]
         self.buff_count = 0
         self.buff_filled = False
@@ -78,15 +90,35 @@ class Robot:
     def set_pos(self, pos):
         self.pos = pos
 
+    def pad_state(self, state):
+        diff = self.true_x*self.true_y-(self.dim_x*self.dim_y)
+        return np.append(state, np.zeros(diff))
+
+    def aval_action(self):
+        moves = [0, 1, 2, 3]
+        if self.pos[0] == 0:
+            moves.remove(3)
+        if self.pos[0] == self.dim_x - 1:
+            moves.remove(1)
+        if self.pos[1] == 0:
+            moves.remove(0)
+        if self.pos[1] == self.dim_y - 1:
+            moves.remove(2)
+        return moves
+    
+
     # Inputted state should be the states of all robots in order then the 
     # position of the target then observed state of the world
     def rand_action(self, state, eps, do_soft=True):
         if do_soft:
             # Soft max
             acts = np.zeros(4)
+            true_state = state
+            if self.do_pad:
+                true_state = self.pad_state(state)
             # Get outputs, normalize to [0, self.max_val], then take exp
             for i in range(4):
-                acts[i] = np.exp(self.forward(self.Qnet, torch.Tensor(np.append(state, i))).data.numpy()/self.max_val)
+                acts[i] = np.exp(self.forward(self.Qnet, torch.Tensor(np.append(true_state, i))).data.numpy()/self.max_val)
             # acts = np.exp(self.forward(self.Qnet, torch.Tensor(state)).data.numpy()/self.max_val)
             acts = acts / sum(acts)
             sum_acts = np.zeros(4)
@@ -102,24 +134,22 @@ class Robot:
             #         break
             # return output_act
         else:
+            moves = self.aval_action()
             if rand.random() < eps:     # Take random action
                 # Moves [0, 1, 2, 3] corresponds to up, right, down, left respectively
-                moves = [0, 1, 2, 3]
-                if self.pos[0] == 0:
-                    moves.remove(3)
-                if self.pos[0] == self.dim_x - 1:
-                    moves.remove(1)
-                if self.pos[1] == 0:
-                    moves.remove(0)
-                if self.pos[1] == self.dim_y - 1:
-                    moves.remove(2)
+                #moves = self.aval_action()
                 return rand.choice(moves)
             else:       # Use Q network
                 acts = np.zeros(4)
+                true_state = state
+                if self.do_pad:
+                    true_state = self.pad_state(state)
                 for i in range(4):
-                    acts[i] = self.forward(self.Qnet, torch.Tensor(np.append(state, i))).data.numpy()
+                    acts[i] = self.forward(self.Qnet, torch.Tensor(np.append(true_state, i))).data.numpy()
                 # acts = self.forward(self.Qnet, torch.Tensor(state)).data.numpy()
                 #print(acts)
+                for i in np.setdiff1d(range(4), moves):
+                    acts[i] = 0
                 max_act = np.argmax(acts)
                 return max_act
 
@@ -154,12 +184,14 @@ class Robot:
             loss = loss_fn(pred_q, targ_q)        
             self.opt.zero_grad()
             loss.backward()
-            prev_w = np.copy(self.Qnet.state_dict()['linear3.weight'].data.numpy())
+            #prev_w = np.copy(self.Qnet.state_dict()['linear3.weight'].data.numpy())
             self.opt.step()
-            new_w = np.copy(self.Qnet.state_dict()['linear3.weight'].data.numpy())
-            diff = np.linalg.norm(new_w-prev_w)
-            if torch.norm(list(self.Qnet.parameters())[0].grad) == 0:
-                print("WARNING: GRAD IS ZERO")
+            #new_w = np.copy(self.Qnet.state_dict()['linear3.weight'].data.numpy())
+            #diff = np.linalg.norm(new_w-prev_w)
+            #if torch.norm(list(self.Qnet.parameters())[5].grad) == 0:
+            #    print(loss)
+            #    print(diff)
+            #    print("WARNING: GRAD IS ZERO")
             if torch.any(torch.isnan(self.Qnet.linear3.weight)) == True:
                 print("IS NAN")
                 for param in self.Qnet.parameters():
