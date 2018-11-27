@@ -2,7 +2,6 @@ import random
 from random import randint
 from operator import add
 import numpy as np
-from multiprocessing import Process
 import copy
 import math
 import time
@@ -39,7 +38,7 @@ class GridWorld:
         self.num_obs = 0                                # Number of states that have currently been observed
         self.rovers = [0 for i in range(self.nrover)]   # Array of Task_Rover objects
         self.filename = filename                        # Filename of model to save to
-        
+
         # Construct the rovers
         for i in range(nground):
             self.rovers[i] = Robot.ground_robot(self.dim_x, self.dim_y, self.nrover, 64, .1, .9)
@@ -57,12 +56,12 @@ class GridWorld:
         for s in observed:
             if self.obs_states[s[0], s[1]] == 0:
                 self.obs_states[s[0], s[1]] = 1
-                self.num_obs = self.num_obs + 1        
+                self.num_obs = self.num_obs + 1
 
     # Function to visualize the current state of the grid world
     def visualize(self):
         grid = [['x' for _ in range(self.dim_x)] for _ in range(self.dim_y)]
-        
+
         drone_symbol_bank = ['1', '2', '3', '4']
         for i in range(self.dim_x):
             for j in range(self.dim_y):
@@ -148,10 +147,10 @@ class GridWorld:
             self.visualize()
             input()
         return reached_goal, change_states, hit_wall
-    
+
     def global_rew(self, num_obs, dist, hit_wall, do_targ=True):
         out = num_obs
-        out -= 1    # Penalty for doing nothing     
+        out -= 1    # Penalty for doing nothing
         if (self.obs_states[self.targ_pos[1], self.targ_pos[0]] == 1) and do_targ:
             out = -dist
         out += sum(hit_wall)*(-1)
@@ -197,7 +196,7 @@ class GridWorld:
         eps=.4
         targ_count = 0
         # rewards = np.zeros(self.niter)
-        for k in range(self.niter):
+        for k in range(self.niter+1):
             self.reset()
             iter_t = time.clock()
             total_rew = 0
@@ -235,7 +234,7 @@ class GridWorld:
                     #    targ_count = 0
                     total_states = set()
                     for i in range(self.nrover):
-                        total_states = total_states|change_states[i]    
+                        total_states = total_states|change_states[i]
                     rew = self.diff_reward(change_states, len(total_states), new_dist-prev_dist, hit_wall)
                     #rew = np.zeros(4)
                     #rew[0] = self.global_rew(0, new_dist-prev_dist, hit_wall)
@@ -251,41 +250,49 @@ class GridWorld:
                     #targ_count += 1
                 else:
                     break
-            if True: #k % 5 == 0:
-                for i in range(self.nrover):
-                    self.rovers[i].targ_net.load_state_dict(self.rovers[i].Qnet.state_dict())
+            for i in range(self.nrover):
+                self.rovers[i].targ_net.load_state_dict(self.rovers[i].Qnet.state_dict())
+            if k % 10 == 0:
+                eval_t = time.clock()
+                evals[int(k/10)] = self.eval()
+                print("EVAL OF ALL TARG_POS: "+str(evals[int(k/10)])+"\t Time: "+str(time.clock()-eval_t))
                 for i in range(self.nrover):
                     torch.save(self.rovers[i].Qnet.state_dict(), "./models/"+self.filename+str(i)+".pth")
-            evals[k] = self.eval_fn(done)
-            eps = eps*.95
+            # evals[k] = self.eval_fn(done)
+            eps = eps*.98
             # rewards[k] = total_rew
-            print("Iteration " + str(k) + ": Eval = " + str(evals[k])+"\tTime = " + str(round(time.clock() - iter_t, 4))
+            print("Iteration " + str(k) + ": Eval = " + str(self.timestep)+"\tTime = " + str(round(time.clock() - iter_t, 4))
                     +"\tTarg_pos: [" + str(self.targ_pos[0])+", "+str(self.targ_pos[1])+"]")
         for i in range(self.nrover):
             torch.save(self.rovers[i].Qnet.state_dict(), "./models/"+self.filename+str(i)+".pth")
         return evals
 
     def eval(self, visual=False):
-        self.reset()
-        self.targ_pos = np.array([self.dim_x-1, self.dim_y-1])
-        done = False
         counter = 0
-        while not done and counter < 100:
-            counter += 1
-            acts = np.zeros(self.nrover)
-            state = self.rovers[0].pos
-            for i in range(1, self.nrover):
-                state = np.append(state, self.rovers[i].pos)
-            if (self.obs_states[self.targ_pos[1], self.targ_pos[0]] == 0):
-                state = np.append(state, [-1,-1])
-            else:
-                state = np.append(state, self.targ_pos)
-            state = np.append(state, self.obs_states.flatten())
-            for i in range(self.nrover):
-                acts[i] = self.rovers[i].rand_action(state, 0, False)
-            #print(acts)
-            done, change_states, hit_wall = self.step(acts, visual)
-        print("Time to capture: " + str(self.timestep))
+        for i in range(self.dim_x):
+            for j in range(self.dim_y):
+                self.reset()
+                self.targ_pos = np.array([i, j])
+                done = False
+                if [i, j] == [0, 0]:
+                    done = True
+                while not done and self.timestep < 100:
+                    acts = np.zeros(self.nrover)
+                    state = self.rovers[0].pos
+                    for i in range(1, self.nrover):
+                        state = np.append(state, self.rovers[i].pos)
+                    if (self.obs_states[self.targ_pos[1], self.targ_pos[0]] == 0):
+                        state = np.append(state, [-1,-1])
+                    else:
+                        state = np.append(state, self.targ_pos)
+                    state = np.append(state, self.obs_states.flatten())
+                    for i in range(self.nrover):
+                        acts[i] = self.rovers[i].rand_action(state, 0, False)
+                    #print(acts)
+                    done, change_states, hit_wall = self.step(acts, visual)
+                if done:
+                    counter += 1
+        return counter
 
 
     def render(self):
@@ -320,11 +327,13 @@ class GridWorld:
         self.eval(True)
 
 def train_whole(loadfile = ""):
-    filename = "15pad_pretrain"
-    env = GridWorld(10, 10, 300, 250, 1, 3, [9, 9], filename)
+    filename = "10pretrain_numsuccess"
+    env = GridWorld(15, 15, 350, 250, 1, 3, [14, 14], filename)
     if loadfile:
         for i in range(env.nrover):
             env.rovers[i].Qnet.load_state_dict(torch.load(loadfile+str(i)+".pth"))
+    print(filename)
+    print("T: "+str(env.T)+"\tniter: "+str(env.niter))
     rews = env.train()
     plt.plot(range(env.niter), rews)
     plt.xlabel("Iterations")
@@ -334,19 +343,20 @@ def train_whole(loadfile = ""):
     plt.savefig(filename+".png")
 
 if __name__ == '__main__':
-    
+
     #env = GridWorld(10, 10, 200, 100, 1, 3, [9, 9])
     #print(env.rovers[0].pos[0], env.rovers[0].pos[1])
     #acts = [0, 1, 1, 0]
    #  for i in range(10):
     # env.step(acts)
       # print(env.reward())
+    torch.set_num_threads(2)
     start_t = time.clock()
-    train_whole("./models/10pad_pretrain")
+    train_whole("./models/5model_pad")
     print("Total time: ", time.clock()-start_t)
     #env = GridWorld(10, 10, 200, 100, 1, 3, [9, 9])
     #env.test_model("./models/big_model")
- 
+
 
 
 

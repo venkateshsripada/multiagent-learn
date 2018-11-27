@@ -91,8 +91,14 @@ class Robot:
         self.pos = pos
 
     def pad_state(self, state):
-        diff = self.true_x*self.true_y-(self.dim_x*self.dim_y)
-        return np.append(state, np.zeros(diff))
+        # diff = self.true_x*self.true_y-(self.dim_x*self.dim_y)
+        diffx = self.true_x - self.dim_x
+        diffy = self.true_y - self.dim_y
+        pad_obs = np.zeros((self.true_x, self.true_y))
+        offset = 2*(self.nrobot+1)
+        for i in range(self.dim_y):
+            pad_obs[i, 0:self.dim_x] = state[offset+i*self.dim_x:offset+(i+1)*self.dim_x]
+        return np.append(state[0:offset], pad_obs.flatten())
 
     def aval_action(self):
         moves = [0, 1, 2, 3]
@@ -149,7 +155,7 @@ class Robot:
                 # acts = self.forward(self.Qnet, torch.Tensor(state)).data.numpy()
                 #print(acts)
                 for i in np.setdiff1d(range(4), moves):
-                    acts[i] = 0
+                    acts[i] = -1
                 max_act = np.argmax(acts)
                 return max_act
 
@@ -160,7 +166,7 @@ class Robot:
         self.buff_state[self.buff_count] = torch.Tensor(state)
         self.buff_reward[self.buff_count] = torch.Tensor((reward,))
         self.buff_count = self.buff_count + 1
-        if self.buff_count == 1000:
+        if self.buff_count == 2000:
             self.buff_filled = True
             self.buff_count = 0
         batch_size = 128
