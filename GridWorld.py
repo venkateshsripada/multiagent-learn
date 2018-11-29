@@ -150,7 +150,7 @@ class GridWorld:
 
     def global_rew(self, num_obs, dist, hit_wall, do_targ=True):
         out = num_obs
-        out -= 1    # Penalty for doing nothing
+        # out -= 1    # Penalty for doing nothing
         if (self.obs_states[self.targ_pos[1], self.targ_pos[0]] == 1) and do_targ:
             out = -dist
         out += sum(hit_wall)*(-1)
@@ -177,6 +177,7 @@ class GridWorld:
                 rewards[i] -= self.global_rew(num_change-diff_obs, 0, hit_wall, do_targ)
             else:
                 rewards[i] -= self.global_rew(num_change-diff_obs, dist, hit_wall, do_targ)
+            rewards[i] -= 1
             if change_hit:
                 hit_wall[i] = True
         return rewards
@@ -252,7 +253,7 @@ class GridWorld:
                     break
             for i in range(self.nrover):
                 self.rovers[i].targ_net.load_state_dict(self.rovers[i].Qnet.state_dict())
-            if k % 10 == 0:
+            if k % 5 == 0:
                 eval_t = time.clock()
                 evals[int(k/10)] = self.eval()
                 print("EVAL OF ALL TARG_POS: "+str(evals[int(k/10)])+"\t Time: "+str(time.clock()-eval_t))
@@ -327,7 +328,7 @@ class GridWorld:
         self.eval(True)
 
 def train_whole(loadfile = ""):
-    filename = "10pretrain_numsuccess"
+    filename = "15"
     env = GridWorld(15, 15, 350, 250, 1, 3, [14, 14], filename)
     if loadfile:
         for i in range(env.nrover):
@@ -335,7 +336,7 @@ def train_whole(loadfile = ""):
     print(filename)
     print("T: "+str(env.T)+"\tniter: "+str(env.niter))
     rews = env.train()
-    plt.plot(range(env.niter), rews)
+    plt.plot(range(int(env.niter/5)), rews)
     plt.xlabel("Iterations")
     plt.ylabel("Final Reward")
     plt.title("Learning curve of DQN")
@@ -352,7 +353,7 @@ if __name__ == '__main__':
       # print(env.reward())
     torch.set_num_threads(2)
     start_t = time.clock()
-    train_whole("./models/5model_pad")
+    train_whole()
     print("Total time: ", time.clock()-start_t)
     #env = GridWorld(10, 10, 200, 100, 1, 3, [9, 9])
     #env.test_model("./models/big_model")
